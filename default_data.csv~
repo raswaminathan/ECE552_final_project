@@ -1,0 +1,2 @@
+benchmark,l1accesses,l1_misses,l1_miss_rate
+ammp_default.txt,15474320,1716940,0.1110
