@@ -12,6 +12,7 @@ cache_percentage_miss = table2array(cache_percentage_table);
 figure;
 bar(cache_misses)
 set(gca, 'XTick', 1:20, 'XTickLabel', benchmarks)
+axis tight
 xlabel('Benchmarks');
 ylabel('Number of L1 cache misses');
 title('Number of L1 cache misses for suite of benchmarks');
@@ -19,6 +20,7 @@ title('Number of L1 cache misses for suite of benchmarks');
 figure;
 bar(cache_percentage_miss)
 set(gca, 'XTick', 1:20, 'XTickLabel', benchmarks)
+axis tight
 xlabel('Benchmarks');
 ylabel('Percent of L1 cache misses');
 title('Percentage of L1 cache misses for suite of benchmarks');
