@@ -278,7 +278,7 @@ CFLAGS = $(MFLAGS) $(FFLAGS) $(OFLAGS) $(BINUTILS_INC) $(BINUTILS_LIB)
 # all the sources
 #
 SRCS =	main.c sim-fast.c sim-safe.c sim-cache.c sim-profile.c \
-	sim-eio.c sim-bpred.c sim-cheetah.c sim-outorder.c homework-4.c \
+	sim-eio.c sim-bpred.c sim-cheetah.c sim-outorder.c final_project.c \
 	memory.c regs.c cache.c bpred.c ptrace.c eventq.c \
 	resource.c endian.c dlite.c symbol.c eval.c options.c range.c \
 	eio.c stats.c endian.c misc.c \
@@ -307,7 +307,7 @@ OBJS =	main.$(OEXT) syscall.$(OEXT) memory.$(OEXT) regs.$(OEXT) \
 #
 PROGS = sim-fast$(EEXT) sim-safe$(EEXT) sim-eio$(EEXT) \
 	sim-bpred$(EEXT) sim-profile$(EEXT) \
-	sim-cache$(EEXT) sim-outorder$(EEXT) homework-4$(EEXT)# sim-cheetah$(EEXT)
+	sim-cache$(EEXT) sim-outorder$(EEXT) final_project$(EEXT)# sim-cheetah$(EEXT)
 
 #
 # all targets, NOTE: library ordering is important...
@@ -393,8 +393,8 @@ sim-cache$(EEXT):	sysprobe$(EEXT) sim-cache.$(OEXT) cache.$(OEXT) $(OBJS) libexo
 sim-outorder$(EEXT):	sysprobe$(EEXT) sim-outorder.$(OEXT) cache.$(OEXT) bpred.$(OEXT) resource.$(OEXT) ptrace.$(OEXT) $(OBJS) libexo/libexo.$(LEXT)
 	$(CC) -o sim-outorder$(EEXT) $(CFLAGS) sim-outorder.$(OEXT) cache.$(OEXT) bpred.$(OEXT) resource.$(OEXT) ptrace.$(OEXT) $(OBJS) libexo/libexo.$(LEXT) $(MLIBS)
 
-homework-4$(EEXT):	sysprobe$(EEXT) homework-4.$(OEXT) cache.$(OEXT) bpred.$(OEXT) resource.$(OEXT) ptrace.$(OEXT) $(OBJS) libexo/libexo.$(LEXT)
-	$(CC) -o homework-4$(EEXT) $(CFLAGS) homework-4.$(OEXT) cache.$(OEXT) bpred.$(OEXT) resource.$(OEXT) ptrace.$(OEXT) $(OBJS) libexo/libexo.$(LEXT) $(MLIBS)
+final_project$(EEXT):	sysprobe$(EEXT) final_project.$(OEXT) cache.$(OEXT) bpred.$(OEXT) resource.$(OEXT) ptrace.$(OEXT) $(OBJS) libexo/libexo.$(LEXT)
+	$(CC) -o final_project$(EEXT) $(CFLAGS) final_project.$(OEXT) cache.$(OEXT) bpred.$(OEXT) resource.$(OEXT) ptrace.$(OEXT) $(OBJS) libexo/libexo.$(LEXT) $(MLIBS)
 
 exo libexo/libexo.$(LEXT): sysprobe$(EEXT)
 	cd libexo $(CS) \
@@ -496,10 +496,10 @@ sim-outorder.$(OEXT): host.h misc.h machine.h machine.def regs.h memory.h
 sim-outorder.$(OEXT): options.h stats.h eval.h cache.h loader.h syscall.h
 sim-outorder.$(OEXT): bpred.h resource.h bitmap.h ptrace.h range.h dlite.h
 sim-outorder.$(OEXT): sim.h
-homework-4.$(OEXT): host.h misc.h machine.h machine.def regs.h memory.h
-homework-4.$(OEXT): options.h stats.h eval.h cache.h loader.h syscall.h
-homework-4.$(OEXT): bpred.h resource.h bitmap.h ptrace.h range.h dlite.h
-homework-4.$(OEXT): sim.h
+final_project.$(OEXT): host.h misc.h machine.h machine.def regs.h memory.h
+final_project.$(OEXT): options.h stats.h eval.h cache.h loader.h syscall.h
+final_project.$(OEXT): bpred.h resource.h bitmap.h ptrace.h range.h dlite.h
+final_project.$(OEXT): sim.h
 memory.$(OEXT): host.h misc.h machine.h machine.def options.h stats.h eval.h
 memory.$(OEXT): memory.h
 regs.$(OEXT): host.h misc.h machine.h machine.def loader.h regs.h memory.h

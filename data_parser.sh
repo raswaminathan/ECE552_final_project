@@ -1,4 +1,11 @@
 #!/bin/bash
+
+if [ $# -ne 1 ]
+  then
+    echo "Need 1 argument: file to parse"
+    exit
+fi
+
 file=$1
 l1_misses=""
 l1_miss_rate=""

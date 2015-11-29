@@ -541,38 +541,25 @@ cache_access(struct cache_t *cp,	/* cache to access */
     {
       /* higly-associativity cache, access through the per-set hash tables */
       int hindex = CACHE_HASH(cp, tag);
-	int count = 0;
       for (blk=cp->sets[set].hash[hindex];
 	   blk;
 	   blk=blk->hash_next)
 	{
-		//printf("%s\n", cp->name);
-		//if (cp->name == "victim cache") {
-			//printf("%d\n", count);
-			count++;
-			
-		//}
 	  if (blk->tag == tag && (blk->status & CACHE_BLK_VALID)) {
 	    goto cache_hit;
 		}
 	}
-	
-	printf("%d\n", count);
     }
   else
     {
       /* low-associativity cache, linear search the way list */
-	int count2 = 0;
       for (blk=cp->sets[set].way_head;
 	   blk;
 	   blk=blk->way_next)
 	{
-		count2++;
 	  if (blk->tag == tag && (blk->status & CACHE_BLK_VALID))
 	    goto cache_hit;
 	}
-		if (count2 > 4)
-			printf("%d %s\n", count2, cp->name);
     }
 
   /* cache block not found */

@@ -10,4 +10,4 @@ benchmark=$1
 binary=$2
 file=$3
 
-./$benchmark ../simple-scalar/final_project ./$binary -max:inst 50000000 -fastfwd 20000000 > $file 2>&1
+./$benchmark ../simple-scalar/sim-outorder ./$binary -max:inst 50000000 -fastfwd 20000000 > $file 2>&1
