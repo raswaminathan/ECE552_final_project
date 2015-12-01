@@ -222,11 +222,11 @@ static int res_fpmult;
 
 // final project moves - creating 4 arrays to represent the different columns in the RPT (reference prediction table)
 
-int sizeOfRPT = 32;
-int tag_values[32];
-md_addr_t prev_addr_values[32];
-int stride_values[32];
-char state_values[32];
+int sizeOfRPT = 1024;
+int tag_values[1024];
+md_addr_t prev_addr_values[1024];
+int stride_values[1024];
+char state_values[1024];
 int currentIndex = 0;
 int isFull = 0;
 
@@ -389,6 +389,12 @@ static struct cache_t *cache_il1;
 /* level 1 instruction cache */
 static struct cache_t *cache_il2;
 
+/* prefetch cache enabled? */
+static int prefetch_cache_enabled = TRUE;
+
+/* prefetch cache */
+static struct cache_t *prefetch_cache;
+
 /* level 1 data cache, entry level data cache */
 static struct cache_t *cache_dl1;
 
@@ -474,6 +480,22 @@ dl1_access_fn(enum mem_cmd cmd,		/* access cmd, Read or Write */
 	  return 0;
 	}
     }
+}
+
+/* prefetch cache miss handler function */
+static unsigned int			/* latency of block access */
+prefetch_access_fn(enum mem_cmd cmd,		/* access cmd, Read or Write */
+	      md_addr_t baddr,		/* block address to access */
+	      int bsize,		/* size of block to access */
+	      struct cache_blk_t *blk,	/* ptr to block in upper level */
+	      tick_t now)		/* time of access */
+{
+  if (cache_dl2) { 
+      if (cmd == Write) {
+        cache_access(cache_dl2, cmd, baddr, NULL, bsize, /* now */now, /* pudata */NULL, /* repl addr */NULL);
+      }
+  } 
+  return 0;
 }
 
 /* l2 data cache block miss handler function */
@@ -750,6 +772,11 @@ sim_reg_options(struct opt_odb_t *odb)
 	      /* print */TRUE, /* format */NULL);
 
   /* cache options */
+
+opt_reg_flag(odb, "-prefetchcache:enabled",
+	       "prefetch cache enabled?",
+	       &prefetch_cache_enabled, /* default */TRUE,
+	       /* print */TRUE, /* format */NULL);
 
   opt_reg_string(odb, "-cache:dl1",
 		 "l1 data cache config, i.e., {<config>|none}",
@@ -1033,6 +1060,15 @@ sim_check_options(struct opt_odb_t *odb,        /* options database */
       cache_dl1 = cache_create(name, nsets, bsize, /* balloc */FALSE,
 			       /* usize */0, assoc, cache_char2policy(c),
 			       dl1_access_fn, /* hit lat */cache_dl1_lat);
+
+	// create the prefetch cache with 1 set and an associativity of 2. The policy is LRU, I set it just to "c" because we only use LRU in the 	//	experiments for the level 1 cache.
+
+	if (prefetch_cache_enabled) {
+      prefetch_cache = cache_create("prefetch cache", 1, bsize, /* balloc */FALSE,
+			       /* usize */0, 64, cache_char2policy(c),
+			       prefetch_access_fn, /* hit lat */0);
+
+	}
 	BLOCK_SIZE = bsize;
 
       /* is the level 2 D-cache defined? */
@@ -2202,9 +2238,32 @@ ruu_commit(void)
 		  if (cache_dl1)
 		    {
 		      /* commit store value to D-cache */
-		      lat =
-			cache_access(cache_dl1, Write, (LSQ[LSQ_head].addr&~3),
+ 			int isInPrefetch = 0;
+			 if (prefetch_cache_enabled) {
+			    isInPrefetch = cache_probe(prefetch_cache, (LSQ[LSQ_head].addr&~3));
+			    if (isInPrefetch) {
+			      /* called to have LRU replacement effects */ 
+				printf("we in prefetchh\n");
+			      cache_access(prefetch_cache, Read, (LSQ[LSQ_head].addr&~3), NULL, 4, sim_cycle, NULL, NULL);
+			    }
+			 }
+			 /* if we hit in victim cache, we can flush this out of the victim cache, because the same block
+			    will be propagated into the L1 when we call cache_access(cache_dl1) a few lines down. We do
+			    not incur a penalty. */
+			 if (isInPrefetch) {
+			    cache_flush_addr(prefetch_cache, (LSQ[LSQ_head].addr&~3), sim_cycle);
+			 }
+
+
+			lat =
+				cache_access(cache_dl1, Write, (LSQ[LSQ_head].addr&~3),
 				     NULL, 4, sim_cycle, NULL, NULL);
+			/* do not penalize a l1 miss if we hit victim cache */
+			if (isInPrefetch) {
+			  lat = cache_dl1_lat;
+			}
+			
+		      
 		      if (lat > cache_dl1_lat)
 			events |= PEV_CACHEMISS;
 		    }
@@ -2675,11 +2734,10 @@ ruu_issue(void)
 		int index, lastIndex, doesExistIndex;
 		doesExistIndex = -1;
 		lastIndex = isFull ? sizeOfRPT : currentIndex + 1;
-		//printf("%d  %08x\n", currentIndex, lsq->tag);
 		for (index = 0; index < lastIndex; index++) {
 		  if (tag_values[index] == rs->tag) {
 			doesExistIndex = index;
-			//printf("ya boy is in the table baby %08x   %d   %d\n", lsq->tag, lsq->tag, numberOfMatches);
+			
 			break;
 		  }
 		}
@@ -2692,7 +2750,8 @@ ruu_issue(void)
 			int correct, currentState, currentStride;
 			md_addr_t prev_addr = prev_addr_values[doesExistIndex];
 			currentStride = stride_values[doesExistIndex];
-			correct = (rs->addr == (prev_addr + stride_values[doesExistIndex])) ? 1 : 0;
+			//printf("[0x%08p]   [0x%08p]   %d    [0x%08p] \n", rs->addr, prev_addr, currentStride, (prev_addr + currentStride));
+			correct = (rs->addr == (prev_addr + currentStride));
 			currentState = state_values[doesExistIndex];
 			// first case - move to transition
 			if (!correct && currentState == 0) {
@@ -2704,6 +2763,7 @@ ruu_issue(void)
 			else if (correct && (currentState == 0 || currentState == 1 || currentState == 2)) {
 				prev_addr_values[doesExistIndex] = (rs->addr);
 				state_values[doesExistIndex] = 2;
+				//printf("%d   %d\n", currentState, cache_probe(cache_dl1, rs->addr));
 			} 
 			// third case - steady state is over; back to initialization			
 			else if (!correct && currentState == 2) {
@@ -2728,20 +2788,47 @@ ruu_issue(void)
 			}
 
 			// now we check if we ought to prefetch
+			
+			if (correct) {
+			//	printf("[0x%08p]    [0x%08p]    %d   %d \n", rs->addr, prev_addr, currentStride, currentState);
+			}			
+
 
 			int shouldPrefetch = correct && currentState != 3;
-			int prefetchAddr = rs->addr + currentStride;
-			printf("%d   %d    %d\n", correct, currentState, currentStride);
-			if (shouldPrefetch && (currentStride > BLOCK_SIZE)) {
+			md_addr_t prefetchAddr = rs->addr + currentStride;
+			//printf("%d   %d    %d\n", correct, currentState, currentStride);
+			int blockSizeCheck = (currentStride > BLOCK_SIZE || currentStride < -1*BLOCK_SIZE);
+			if (shouldPrefetch) {
 
 				// we have met the conditions for naive prefetch, we doin it 
 				numberOfMatches++;
-				printf("%d\n", numberOfMatches);
-				tick_t now = 0;
-				int lat =
-					cache_access(cache_dl1, Write, prefetchAddr&~3,
-				    	 NULL, 4, sim_cycle, NULL, NULL);
-				sim_cycle -= lat;
+				//printf("%d\n", numberOfMatches);
+				//tick_t now = 0;
+				//int lat =
+				//	cache_access(cache_dl1, Write, prefetchAddr&~3,
+				  //  	 NULL, 4, sim_cycle, NULL, NULL);
+				//sim_cycle -= lat;
+				//printf("we writing\n");
+				
+				int inL1 = cache_probe(cache_dl1, prefetchAddr);
+				int inL2 = cache_probe(cache_dl2, prefetchAddr);
+			//					printf("%08x   %08x  %d   %d\n", prefetchAddr, rs->addr, inL1, inL2);
+				//if (inL1) {
+				//	printf("in l1\n");
+				//}
+				//printf("%d   %d    %08x   %08x\n", inL1, inL2, prefetchAddr, prefetchAddr&~3);
+				
+				if (!inL1) {
+					//printf("GETTING HERE\n");
+					int lat =
+						cache_access(prefetch_cache, Write, prefetchAddr&~3,
+				    	 	NULL, 4, sim_cycle, NULL, NULL);
+				}
+				
+				if (inL2) {
+					//printf("GETTING HERERERE\n");
+            				//cache_flush_addr(cache_dl2, (prefetchAddr & ~3), sim_cycle);
+				}
 				//printf("%d\n", lat);
 			}		
 			
@@ -2751,13 +2838,14 @@ ruu_issue(void)
 			prev_addr_values[currentIndex] = rs->addr;
 			stride_values[currentIndex] = 0;
 			state_values[currentIndex] = 0;
+			if ((currentIndex + 1) >= 32) {
+				isFull = 1;
+				currentIndex = 0;
+			} else {
+				currentIndex++;
+			}
 		}
-		if ((currentIndex + 1) >= 32) {
-			isFull = 1;
-			currentIndex = 0;
-		} else {
-			currentIndex++;
-		}
+		
 
 	  }
 
@@ -2846,10 +2934,38 @@ ruu_issue(void)
 			      if (cache_dl1 && valid_addr)
 				{
 				  /* access the cache if non-faulting */
+				int isInPrefetch = 0;
+				if (prefetch_cache_enabled) {
+				    isInPrefetch = cache_probe(prefetch_cache, (rs->addr&~3));
+				    if (isInPrefetch) {
+				      /* called to have LRU replacement effects */
+					 
+				      cache_access(prefetch_cache, Read, (rs->addr&~3), NULL, 4, sim_cycle, NULL, NULL);
+					//printf("we in prefetch   %d\n", cache_probe(cache_dl1, rs->addr&~3));
+				    }
+				 }
+				 /* if we hit in victim cache, we can flush this out of the victim cache, because the same block
+				    will be propagated into the L1 when we call cache_access(cache_dl1) a few lines down. We do
+				    not incur a penalty. */
+				 if (isInPrefetch) {
+				    cache_flush_addr(prefetch_cache, (rs->addr&~3), sim_cycle);
+				 }
+					//printf("%d", sim_cycle);
+
+				//if (!isInPrefetch) {
 				  load_lat =
 				    cache_access(cache_dl1, Read,
 						 (rs->addr & ~3), NULL, 4,
 						 sim_cycle, NULL, NULL);
+				//} else {
+				//	load_lat = 0;
+				//}
+					//printf("    %d \n", sim_cycle);
+
+				/* do not penalize a l1 miss if we hit victim cache */
+					if (isInPrefetch) {
+					  load_lat = cache_dl1_lat;
+					}
 				  if (load_lat > cache_dl1_lat)
 				    events |= PEV_CACHEMISS;
 				}
