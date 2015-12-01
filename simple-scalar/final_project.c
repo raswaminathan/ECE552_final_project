@@ -2239,28 +2239,29 @@ ruu_commit(void)
 		    {
 		      /* commit store value to D-cache */
  			int isInPrefetch = 0;
-			 if (prefetch_cache_enabled) {
+			if (prefetch_cache_enabled) {
 			    isInPrefetch = cache_probe(prefetch_cache, (LSQ[LSQ_head].addr&~3));
 			    if (isInPrefetch) {
-			      /* called to have LRU replacement effects */ 
-				printf("we in prefetchh\n");
+			      /* called to have LRU replacement effects */
+				 
 			      cache_access(prefetch_cache, Read, (LSQ[LSQ_head].addr&~3), NULL, 4, sim_cycle, NULL, NULL);
+				//printf("we in prefetch   %d\n", cache_probe(cache_dl1, rs->addr&~3));
 			    }
 			 }
-			 /* if we hit in victim cache, we can flush this out of the victim cache, because the same block
-			    will be propagated into the L1 when we call cache_access(cache_dl1) a few lines down. We do
-			    not incur a penalty. */
+			 
 			 if (isInPrefetch) {
-			    cache_flush_addr(prefetch_cache, (LSQ[LSQ_head].addr&~3), sim_cycle);
+			    //cache_flush_addr(prefetch_cache, (rs->addr&~3), sim_cycle);
+				lat = 0;
 			 }
-
-
+				//printf("%d", sim_cycle);
+			else {
 			lat =
 				cache_access(cache_dl1, Write, (LSQ[LSQ_head].addr&~3),
 				     NULL, 4, sim_cycle, NULL, NULL);
+			}
 			/* do not penalize a l1 miss if we hit victim cache */
 			if (isInPrefetch) {
-			  lat = cache_dl1_lat;
+			 // lat = 0;
 			}
 			
 		      
@@ -2799,7 +2800,6 @@ ruu_issue(void)
 			//printf("%d   %d    %d\n", correct, currentState, currentStride);
 			int blockSizeCheck = (currentStride > BLOCK_SIZE || currentStride < -1*BLOCK_SIZE);
 			if (shouldPrefetch) {
-
 				// we have met the conditions for naive prefetch, we doin it 
 				numberOfMatches++;
 				//printf("%d\n", numberOfMatches);
@@ -2810,8 +2810,8 @@ ruu_issue(void)
 				//sim_cycle -= lat;
 				//printf("we writing\n");
 				
-				int inL1 = cache_probe(cache_dl1, prefetchAddr);
-				int inL2 = cache_probe(cache_dl2, prefetchAddr);
+				int inL1 = cache_probe(cache_dl1, prefetchAddr&~3);
+				int inL2 = cache_probe(cache_dl2, prefetchAddr&~3);
 			//					printf("%08x   %08x  %d   %d\n", prefetchAddr, rs->addr, inL1, inL2);
 				//if (inL1) {
 				//	printf("in l1\n");
@@ -2819,17 +2819,16 @@ ruu_issue(void)
 				//printf("%d   %d    %08x   %08x\n", inL1, inL2, prefetchAddr, prefetchAddr&~3);
 				
 				if (!inL1) {
-					//printf("GETTING HERE\n");
 					int lat =
 						cache_access(prefetch_cache, Write, prefetchAddr&~3,
-				    	 	NULL, 4, sim_cycle, NULL, NULL);
+				   	 	NULL, 4, sim_cycle, NULL, NULL);
+					
 				}
 				
 				if (inL2) {
 					//printf("GETTING HERERERE\n");
             				//cache_flush_addr(cache_dl2, (prefetchAddr & ~3), sim_cycle);
 				}
-				//printf("%d\n", lat);
 			}		
 			
 		} else {
@@ -2838,7 +2837,7 @@ ruu_issue(void)
 			prev_addr_values[currentIndex] = rs->addr;
 			stride_values[currentIndex] = 0;
 			state_values[currentIndex] = 0;
-			if ((currentIndex + 1) >= 32) {
+			if ((currentIndex + 1) >= sizeOfRPT) {
 				isFull = 1;
 				currentIndex = 0;
 			} else {
@@ -2944,27 +2943,22 @@ ruu_issue(void)
 					//printf("we in prefetch   %d\n", cache_probe(cache_dl1, rs->addr&~3));
 				    }
 				 }
-				 /* if we hit in victim cache, we can flush this out of the victim cache, because the same block
-				    will be propagated into the L1 when we call cache_access(cache_dl1) a few lines down. We do
-				    not incur a penalty. */
+				 
 				 if (isInPrefetch) {
-				    cache_flush_addr(prefetch_cache, (rs->addr&~3), sim_cycle);
+				    //cache_flush_addr(prefetch_cache, (rs->addr&~3), sim_cycle);
+					load_lat = 0;
 				 }
 					//printf("%d", sim_cycle);
-
-				//if (!isInPrefetch) {
+				else {
 				  load_lat =
 				    cache_access(cache_dl1, Read,
 						 (rs->addr & ~3), NULL, 4,
 						 sim_cycle, NULL, NULL);
-				//} else {
-				//	load_lat = 0;
-				//}
-					//printf("    %d \n", sim_cycle);
+				}
 
 				/* do not penalize a l1 miss if we hit victim cache */
 					if (isInPrefetch) {
-					  load_lat = cache_dl1_lat;
+					  //load_lat = 0;
 					}
 				  if (load_lat > cache_dl1_lat)
 				    events |= PEV_CACHEMISS;
