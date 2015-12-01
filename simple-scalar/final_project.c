@@ -2731,7 +2731,7 @@ ruu_issue(void)
 
 		
 // let's check the table shall we?
-
+if (prefetch_cache_enabled) {
 		int index, lastIndex, doesExistIndex;
 		doesExistIndex = -1;
 		lastIndex = isFull ? sizeOfRPT : currentIndex + 1;
@@ -2844,7 +2844,7 @@ ruu_issue(void)
 				currentIndex++;
 			}
 		}
-		
+	}
 
 	  }
 
