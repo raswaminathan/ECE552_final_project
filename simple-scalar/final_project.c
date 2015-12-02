@@ -502,7 +502,9 @@ dl1_access_fn(enum mem_cmd cmd,		/* access cmd, Read or Write */
 		int existsInPrefetchBuffer = cache_probe(prefetch_buffer, baddr);
 		if (existsInPrefetchBuffer) {
 			markov_hits++;
-			return 0;
+			lat = cache_access(prefetch_buffer, cmd, baddr, NULL, bsize,
+			 /* now */now, /* pudata */NULL, /* repl addr */NULL);
+			return lat;
 		}
 	}
 	
@@ -1123,14 +1125,14 @@ sim_check_options(struct opt_odb_t *odb,        /* options database */
 
       		prefetch_buffer = cache_create("prefetch buffer", 1, bsize, /* balloc */FALSE,
 			       /* usize */0, 64, cache_char2policy(c),
-			       prefetch_access_fn, /* hit lat */0);
+			       prefetch_access_fn, /* hit lat */1);
 	}
 	// create the prefetch cache with 1 set and an associativity of 2. The policy is LRU, I set it just to "c" because we only use LRU in the 	//	experiments for the level 1 cache.
 
 	if (prefetch_cache_enabled) {
       prefetch_cache = cache_create("prefetch cache", 1, bsize, /* balloc */FALSE,
 			       /* usize */0, 64, cache_char2policy(c),
-			       prefetch_access_fn, /* hit lat */0);
+			       prefetch_access_fn, /* hit lat */1);
 
 	}
 	
@@ -2312,14 +2314,14 @@ ruu_commit(void)
 		      /* commit store value to D-cache */
  			int isInPrefetch = 0;
 			if (prefetch_cache_enabled) {
-			    //isInPrefetch = cache_probe(prefetch_cache, (LSQ[LSQ_head].addr&~3));
-			    
-			 } 
-			if (isInPrefetch) {				 
-			      //cache_access(prefetch_cache, Read, (LSQ[LSQ_head].addr&~3), NULL, 4, sim_cycle, NULL, NULL);
+				isInPrefetch = cache_probe(prefetch_cache, (LSQ[LSQ_head].addr&~3));
+			}
+
+			if (isInPrefetch) {
+			        lat = cache_access(prefetch_cache, Read, (LSQ[LSQ_head].addr&~3), NULL, 4, sim_cycle, NULL, NULL);
+				//cache_access(cache_dl1, Write, (LSQ[LSQ_head].addr&~3), NULL, 4, sim_cycle, NULL, NULL);
 				//cache_flush_addr(prefetch_cache, (rs->addr&~3), sim_cycle);
 				stride_hits++;
-				lat = 1;
 			} else {
 				lat =
 				cache_access(cache_dl1, Write, (LSQ[LSQ_head].addr&~3),
@@ -3054,14 +3056,14 @@ ruu_issue(void)
 				  /* access the cache if non-faulting */
 				int isInPrefetch = 0;
 				if (prefetch_cache_enabled) {
-				    isInPrefetch = cache_probe(prefetch_cache, (rs->addr&~3));
-				 } 
+					isInPrefetch = cache_probe(prefetch_cache, (rs->addr&~3));
+				}
 
 				if (isInPrefetch) {
-				     // cache_access(prefetch_cache, Read, (rs->addr&~3), NULL, 4, sim_cycle, NULL, NULL);
+					load_lat = cache_access(prefetch_cache, Read, (rs->addr&~3), NULL, 4, sim_cycle, NULL, NULL);
+					//cache_access(cache_dl1, Write, (rs->addr&~3), NULL, 4, sim_cycle, NULL, NULL);
 					//cache_flush_addr(prefetch_cache, (rs->addr&~3), sim_cycle);
 					stride_hits++;
-					load_lat = 1;
 				} else {
 				  	load_lat =
 				  	  cache_access(cache_dl1, Read,
