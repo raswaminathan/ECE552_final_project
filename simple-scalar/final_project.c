@@ -220,8 +220,9 @@ static int res_fpalu;
 static int res_fpmult;
 
 
-// final project moves - creating 4 arrays to represent the different columns in the RPT (reference prediction table)
+// final project moves - 
 
+// creating 4 arrays to represent the different columns in the RPT (reference prediction table)
 int sizeOfRPT = 1024;
 int tag_values[1024];
 md_addr_t prev_addr_values[1024];
@@ -234,6 +235,32 @@ int BLOCK_SIZE = 0;
 
 /// for debugging
 int numberOfMatches = 0;
+
+///// ^^^ is for stride prefetcher
+
+//// markov prefetcher data structures
+
+// array that represents the keys for the miss history table
+md_addr_t addr_keys[128];
+
+// each element of this struct represents one entry of the MHT
+struct MissHistoryEntry
+    {
+                int count;
+                md_addr_t address;
+    };
+
+// represents the meat of the MHT, indexed by the above array
+// the 17th entry is the total count of number of misses to that address
+struct MissHistoryEntry miss_history_table[17][128];
+
+// 
+int MHT_SIZE = 128;
+int MHT_WIDTH = 16;
+int currentMHTIndex = 0;
+int isMHTFull = 0;
+md_addr_t lastAddressMissed;
+int lastAddressMissedIndex = 0;
 
 /* text-based stat profiles */
 #define MAX_PCSTAT_VARS 8
@@ -337,6 +364,9 @@ static counter_t sim_num_loads = 0;
 /* total number of loads executed */
 static counter_t sim_total_loads = 0;
 
+/* total prefetch hits */
+static counter_t sim_total_prefetch_hits = 0;
+
 /* total number of branches committed */
 static counter_t sim_num_branches = 0;
 
@@ -390,10 +420,16 @@ static struct cache_t *cache_il1;
 static struct cache_t *cache_il2;
 
 /* prefetch cache enabled? */
-static int prefetch_cache_enabled = TRUE;
+static int prefetch_cache_enabled = FALSE;
+
+/* markov prefetching enabled? */
+static int markov_prefetching_enabled = TRUE;
 
 /* prefetch cache */
 static struct cache_t *prefetch_cache;
+
+/* prefetch buffer for markov prefetching */
+static struct cache_t *prefetch_buffer;
 
 /* level 1 data cache, entry level data cache */
 static struct cache_t *cache_dl1;
@@ -456,6 +492,19 @@ dl1_access_fn(enum mem_cmd cmd,		/* access cmd, Read or Write */
 {
   unsigned int lat;
 
+  if (markov_prefetching_enabled) {
+	
+	// on load, check prefetch buffer before messing with L2 cache, if it exists in this buffer just return 0 latency, else check L2
+	if (cmd == Read) {
+		int existsInPrefetchBuffer = cache_probe(prefetch_buffer, baddr);
+		if (existsInPrefetchBuffer) {
+			sim_total_prefetch_hits++;
+			return 0;
+		}
+	}
+	
+  }
+
   if (cache_dl2)
     {
       /* access next level of data cache hierarchy */
@@ -492,7 +541,7 @@ prefetch_access_fn(enum mem_cmd cmd,		/* access cmd, Read or Write */
 {
   if (cache_dl2) { 
       if (cmd == Write) {
-        cache_access(cache_dl2, cmd, baddr, NULL, bsize, /* now */now, /* pudata */NULL, /* repl addr */NULL);
+         //cache_access(cache_dl2, cmd, baddr, NULL, bsize, /* now */now, /* pudata */NULL, /* repl addr */NULL);
       }
   } 
   return 0;
@@ -775,7 +824,12 @@ sim_reg_options(struct opt_odb_t *odb)
 
 opt_reg_flag(odb, "-prefetchcache:enabled",
 	       "prefetch cache enabled?",
-	       &prefetch_cache_enabled, /* default */TRUE,
+	       &prefetch_cache_enabled, /* default */FALSE,
+	       /* print */TRUE, /* format */NULL);
+
+opt_reg_flag(odb, "-markovprefetching:enabled",
+	       "markov prefetching enabled?",
+	       &markov_prefetching_enabled, /* default */TRUE,
 	       /* print */TRUE, /* format */NULL);
 
   opt_reg_string(odb, "-cache:dl1",
@@ -1061,6 +1115,13 @@ sim_check_options(struct opt_odb_t *odb,        /* options database */
 			       /* usize */0, assoc, cache_char2policy(c),
 			       dl1_access_fn, /* hit lat */cache_dl1_lat);
 
+// using the same config as the stride prefetch cache
+	if (markov_prefetching_enabled) {
+
+      		prefetch_buffer = cache_create("prefetch buffer", 1, bsize, /* balloc */FALSE,
+			       /* usize */0, 64, cache_char2policy(c),
+			       prefetch_access_fn, /* hit lat */0);
+	}
 	// create the prefetch cache with 1 set and an associativity of 2. The policy is LRU, I set it just to "c" because we only use LRU in the 	//	experiments for the level 1 cache.
 
 	if (prefetch_cache_enabled) {
@@ -1069,7 +1130,9 @@ sim_check_options(struct opt_odb_t *odb,        /* options database */
 			       prefetch_access_fn, /* hit lat */0);
 
 	}
+	
 	BLOCK_SIZE = bsize;
+	
 
       /* is the level 2 D-cache defined? */
       if (!mystricmp(cache_dl2_opt, "none"))
@@ -1291,6 +1354,9 @@ sim_reg_stats(struct stat_sdb_t *sdb)   /* stats database */
   stat_reg_formula(sdb, "sim_CPI",
 		   "cycles per instruction",
 		   "sim_cycle / sim_num_insn", /* format */NULL);
+  stat_reg_counter(sdb, "sim_number_prefetch_buffer_hits",
+		   "total number of prefetch buffer hits",
+		   &sim_total_prefetch_hits, 0, NULL);
   stat_reg_formula(sdb, "sim_exec_BW",
 		   "total instructions (mis-spec + committed) per cycle",
 		   "sim_total_insn / sim_cycle", /* format */NULL);
@@ -2241,28 +2307,110 @@ ruu_commit(void)
  			int isInPrefetch = 0;
 			if (prefetch_cache_enabled) {
 			    isInPrefetch = cache_probe(prefetch_cache, (LSQ[LSQ_head].addr&~3));
-			    if (isInPrefetch) {
+			    
+			 } 
+			if (isInPrefetch) {
 			      /* called to have LRU replacement effects */
 				 
 			      cache_access(prefetch_cache, Read, (LSQ[LSQ_head].addr&~3), NULL, 4, sim_cycle, NULL, NULL);
-				//printf("we in prefetch   %d\n", cache_probe(cache_dl1, rs->addr&~3));
-			    }
-			 }
-			 
-			 if (isInPrefetch) {
-			    //cache_flush_addr(prefetch_cache, (rs->addr&~3), sim_cycle);
+				//cache_flush_addr(prefetch_cache, (rs->addr&~3), sim_cycle);
 				lat = 0;
-			 }
-				//printf("%d", sim_cycle);
-			else {
-			lat =
+			} else {
+				lat =
 				cache_access(cache_dl1, Write, (LSQ[LSQ_head].addr&~3),
 				     NULL, 4, sim_cycle, NULL, NULL);
+
+
+				// markov prefetching implementation addr_keys, miss_history_table, MissHistoryEntry (count, address)
+				// lastAddressMissed, currentMHTIndex, isMHTFull, lastAddressMissedIndex
+				if (markov_prefetching_enabled) {
+			
+					// if this is true we have just missed in the L1 cache, must do some table magic
+				  	if (lat > cache_dl1_lat) {
+						int index, indexInTable;
+						indexInTable = -1;
+						for (index = 0; index < MHT_SIZE; index++) {
+							if ( (LSQ[LSQ_head].addr&~3) == addr_keys[index]) {
+								indexInTable = index;
+								break;
+							}
+						}
+						
+						// the entry exists in the table
+						int mhIndex;
+						if (indexInTable > -1) {
+							int totalMissesToAddr = miss_history_table[MHT_WIDTH][indexInTable].count;
+							int threshold = 1;
+							
+							for (mhIndex = 0; mhIndex < MHT_WIDTH; mhIndex++) {
+								
+								if (miss_history_table[mhIndex][indexInTable].count >= threshold) {
+									// add this address to prefetch buffer
+									cache_access(prefetch_buffer, Write,
+										 (miss_history_table[mhIndex][indexInTable].address & ~3), NULL, 4,
+										 sim_cycle, NULL, NULL);
+								}
+								if (miss_history_table[mhIndex][indexInTable].count == 0) {
+									break;
+								}
+							}
+						} else {
+							// add this address to the table, naively as shit of course
+							addr_keys[currentMHTIndex] =  (LSQ[LSQ_head].addr&~3);
+							indexInTable = currentMHTIndex;
+							
+							// clear table for this address
+							miss_history_table[MHT_WIDTH][indexInTable].count = 0;
+							for (mhIndex = 0; mhIndex < MHT_WIDTH; mhIndex++) {
+								miss_history_table[mhIndex][indexInTable].count = 0;
+								miss_history_table[mhIndex][indexInTable].address = 0;
+							}
+							if (currentMHTIndex == MHT_SIZE - 1) {
+								currentMHTIndex = 0;
+								isMHTFull = 1;
+							} else {
+								currentMHTIndex++;
+							}			
+						}
+							
+						// now we need to make sure we add the current miss address to the miss entry 
+						int lowCount = 0;
+						int lowCountIndex = 0;
+						miss_history_table[MHT_WIDTH][lastAddressMissedIndex].count++;
+						for (mhIndex = 0; mhIndex < MHT_WIDTH; mhIndex++) {
+							
+							/// current miss address already exists in table, just increment counter!
+							if (miss_history_table[mhIndex][lastAddressMissedIndex].address ==  (LSQ[LSQ_head].addr&~3)) {
+								miss_history_table[mhIndex][lastAddressMissedIndex].count++;
+								break;
+							}
+
+							/// there's an empty entry, just write current miss address there
+							if (miss_history_table[mhIndex][lastAddressMissedIndex].count == 0) {
+								miss_history_table[mhIndex][lastAddressMissedIndex].count++;
+								miss_history_table[mhIndex][lastAddressMissedIndex].address =  (LSQ[LSQ_head].addr&~3);
+								break;
+							}
+
+							if (miss_history_table[mhIndex][lastAddressMissedIndex].count > lowCount) {
+								lowCount = miss_history_table[mhIndex][lastAddressMissedIndex].count;
+								lowCountIndex = mhIndex;
+							}
+							
+							// table row is full
+							/// replace lowest count index									
+							if (mhIndex == MHT_WIDTH - 1) {
+								miss_history_table[lowCountIndex][lastAddressMissedIndex].count = 1;
+								miss_history_table[lowCountIndex][lastAddressMissedIndex].address = (LSQ[LSQ_head].addr&~3);
+							}
+						}
+
+						lastAddressMissed =  (LSQ[LSQ_head].addr&~3);
+						lastAddressMissedIndex = indexInTable;
+				 	}
+				}
 			}
-			/* do not penalize a l1 miss if we hit victim cache */
-			if (isInPrefetch) {
-			 // lat = 0;
-			}
+			
 			
 		      
 		      if (lat > cache_dl1_lat)
@@ -2936,32 +3084,114 @@ if (prefetch_cache_enabled) {
 				int isInPrefetch = 0;
 				if (prefetch_cache_enabled) {
 				    isInPrefetch = cache_probe(prefetch_cache, (rs->addr&~3));
-				    if (isInPrefetch) {
+				 } 
+
+				if (isInPrefetch) {
 				      /* called to have LRU replacement effects */
 					 
 				      cache_access(prefetch_cache, Read, (rs->addr&~3), NULL, 4, sim_cycle, NULL, NULL);
-					//printf("we in prefetch   %d\n", cache_probe(cache_dl1, rs->addr&~3));
-				    }
-				 }
-				 
-				 if (isInPrefetch) {
-				    //cache_flush_addr(prefetch_cache, (rs->addr&~3), sim_cycle);
+					//cache_flush_addr(prefetch_cache, (rs->addr&~3), sim_cycle);
 					load_lat = 0;
-				 }
-					//printf("%d", sim_cycle);
-				else {
-				  load_lat =
-				    cache_access(cache_dl1, Read,
+				} else {
+				  	load_lat =
+				  	  cache_access(cache_dl1, Read,
 						 (rs->addr & ~3), NULL, 4,
 						 sim_cycle, NULL, NULL);
+
+					// markov prefetching implementation addr_keys, miss_history_table, MissHistoryEntry (count, address)
+					// lastAddressMissed, currentMHTIndex, isMHTFull, lastAddressMissedIndex
+					if (markov_prefetching_enabled) {
+				
+						// if this is true we have just missed in the L1 cache, must do some table magic
+					  	if (load_lat > cache_dl1_lat) {
+							int index, indexInTable;
+							indexInTable = -1;
+							for (index = 0; index < MHT_SIZE; index++) {
+								if (rs->addr == addr_keys[index]) {
+									indexInTable = index;
+									break;
+								}
+							}
+							
+							// the entry exists in the table
+							int mhIndex;
+							if (indexInTable > -1) {
+								int totalMissesToAddr = miss_history_table[MHT_WIDTH][indexInTable].count;
+								int threshold = 1;
+								
+								for (mhIndex = 0; mhIndex < MHT_WIDTH; mhIndex++) {
+									
+									if (miss_history_table[mhIndex][indexInTable].count >= threshold) {
+										// add this address to prefetch buffer
+										cache_access(prefetch_buffer, Write,
+											 (miss_history_table[mhIndex][indexInTable].address & ~3), NULL, 4,
+											 sim_cycle, NULL, NULL);
+									}
+									if (miss_history_table[mhIndex][indexInTable].count == 0) {
+										break;
+									}
+								}
+							} else {
+								// add this address to the table, naively as shit of course
+								addr_keys[currentMHTIndex] = rs->addr;
+								indexInTable = currentMHTIndex;
+								
+								// clear table for this address
+								miss_history_table[MHT_WIDTH][indexInTable].count = 0;
+								for (mhIndex = 0; mhIndex < MHT_WIDTH; mhIndex++) {
+									miss_history_table[mhIndex][indexInTable].count = 0;
+									miss_history_table[mhIndex][indexInTable].address = 0;
+								}
+								if (currentMHTIndex == MHT_SIZE - 1) {
+									currentMHTIndex = 0;
+									isMHTFull = 1;
+								} else {
+									currentMHTIndex++;
+								}			
+							}
+								
+							// now we need to make sure we add the current miss address to the miss entry 
+							int lowCount = 0;
+							int lowCountIndex = 0;
+							miss_history_table[MHT_WIDTH][lastAddressMissedIndex].count++;
+							for (mhIndex = 0; mhIndex < MHT_WIDTH; mhIndex++) {
+								
+								/// current miss address already exists in table, just increment counter!
+								if (miss_history_table[mhIndex][lastAddressMissedIndex].address == rs->addr) {
+									miss_history_table[mhIndex][lastAddressMissedIndex].count++;
+									break;
+								}
+	
+								/// there's an empty entry, just write current miss address there
+								if (miss_history_table[mhIndex][lastAddressMissedIndex].count == 0) {
+									miss_history_table[mhIndex][lastAddressMissedIndex].count++;
+									miss_history_table[mhIndex][lastAddressMissedIndex].address = rs->addr;
+									break;
+								}
+
+								if (miss_history_table[mhIndex][lastAddressMissedIndex].count > lowCount) {
+									lowCount = miss_history_table[mhIndex][lastAddressMissedIndex].count;
+									lowCountIndex = mhIndex;
+								}
+								
+								// table row is full
+								/// replace lowest count index									
+								if (mhIndex == MHT_WIDTH - 1) {
+									miss_history_table[lowCountIndex][lastAddressMissedIndex].count = 1;
+									miss_history_table[lowCountIndex][lastAddressMissedIndex].address = rs->addr;
+								}
+							}
+
+							lastAddressMissed = rs->addr;
+							lastAddressMissedIndex = indexInTable;
+					 	}
+					}
 				}
 
-				/* do not penalize a l1 miss if we hit victim cache */
-					if (isInPrefetch) {
-					  //load_lat = 0;
-					}
-				  if (load_lat > cache_dl1_lat)
+				  if (load_lat > cache_dl1_lat) {
 				    events |= PEV_CACHEMISS;
+				  }
+
 				}
 			      else
 				{
