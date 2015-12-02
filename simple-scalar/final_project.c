@@ -364,8 +364,11 @@ static counter_t sim_num_loads = 0;
 /* total number of loads executed */
 static counter_t sim_total_loads = 0;
 
-/* total prefetch hits */
-static counter_t sim_total_prefetch_hits = 0;
+/* total markov prefetch hits */
+static counter_t markov_hits = 0;
+
+/* total stride prefetch hits */
+static counter_t stride_hits = 0;
 
 /* total number of branches committed */
 static counter_t sim_num_branches = 0;
@@ -420,10 +423,10 @@ static struct cache_t *cache_il1;
 static struct cache_t *cache_il2;
 
 /* prefetch cache enabled? */
-static int prefetch_cache_enabled = FALSE;
+static int prefetch_cache_enabled = TRUE;
 
 /* markov prefetching enabled? */
-static int markov_prefetching_enabled = TRUE;
+static int markov_prefetching_enabled = FALSE;
 
 /* prefetch cache */
 static struct cache_t *prefetch_cache;
@@ -498,7 +501,7 @@ dl1_access_fn(enum mem_cmd cmd,		/* access cmd, Read or Write */
 	if (cmd == Read) {
 		int existsInPrefetchBuffer = cache_probe(prefetch_buffer, baddr);
 		if (existsInPrefetchBuffer) {
-			sim_total_prefetch_hits++;
+			markov_hits++;
 			return 0;
 		}
 	}
@@ -541,7 +544,7 @@ prefetch_access_fn(enum mem_cmd cmd,		/* access cmd, Read or Write */
 {
   if (cache_dl2) { 
       if (cmd == Write) {
-         //cache_access(cache_dl2, cmd, baddr, NULL, bsize, /* now */now, /* pudata */NULL, /* repl addr */NULL);
+         cache_access(cache_dl2, cmd, baddr, NULL, bsize, /* now */now, /* pudata */NULL, /* repl addr */NULL);
       }
   } 
   return 0;
@@ -824,12 +827,12 @@ sim_reg_options(struct opt_odb_t *odb)
 
 opt_reg_flag(odb, "-prefetchcache:enabled",
 	       "prefetch cache enabled?",
-	       &prefetch_cache_enabled, /* default */FALSE,
+	       &prefetch_cache_enabled, /* default */TRUE,
 	       /* print */TRUE, /* format */NULL);
 
 opt_reg_flag(odb, "-markovprefetching:enabled",
 	       "markov prefetching enabled?",
-	       &markov_prefetching_enabled, /* default */TRUE,
+	       &markov_prefetching_enabled, /* default */FALSE,
 	       /* print */TRUE, /* format */NULL);
 
   opt_reg_string(odb, "-cache:dl1",
@@ -1355,8 +1358,11 @@ sim_reg_stats(struct stat_sdb_t *sdb)   /* stats database */
 		   "cycles per instruction",
 		   "sim_cycle / sim_num_insn", /* format */NULL);
   stat_reg_counter(sdb, "sim_number_prefetch_buffer_hits",
-		   "total number of prefetch buffer hits",
-		   &sim_total_prefetch_hits, 0, NULL);
+		   "total number of markov hits (in prefetch buffer)",
+		   &markov_hits, 0, NULL);
+  stat_reg_counter(sdb, "sim_number_prefetch_cache_hits",
+		   "total number of stride hits (in prefetch cache)",
+		   &stride_hits, 0, NULL);
   stat_reg_formula(sdb, "sim_exec_BW",
 		   "total instructions (mis-spec + committed) per cycle",
 		   "sim_total_insn / sim_cycle", /* format */NULL);
@@ -2306,15 +2312,14 @@ ruu_commit(void)
 		      /* commit store value to D-cache */
  			int isInPrefetch = 0;
 			if (prefetch_cache_enabled) {
-			    isInPrefetch = cache_probe(prefetch_cache, (LSQ[LSQ_head].addr&~3));
+			    //isInPrefetch = cache_probe(prefetch_cache, (LSQ[LSQ_head].addr&~3));
 			    
 			 } 
-			if (isInPrefetch) {
-			      /* called to have LRU replacement effects */
-				 
-			      cache_access(prefetch_cache, Read, (LSQ[LSQ_head].addr&~3), NULL, 4, sim_cycle, NULL, NULL);
+			if (isInPrefetch) {				 
+			      //cache_access(prefetch_cache, Read, (LSQ[LSQ_head].addr&~3), NULL, 4, sim_cycle, NULL, NULL);
 				//cache_flush_addr(prefetch_cache, (rs->addr&~3), sim_cycle);
-				lat = 0;
+				stride_hits++;
+				lat = 1;
 			} else {
 				lat =
 				cache_access(cache_dl1, Write, (LSQ[LSQ_head].addr&~3),
@@ -2410,8 +2415,6 @@ ruu_commit(void)
 				 	}
 				}
 			}
-			
-			
 		      
 		      if (lat > cache_dl1_lat)
 			events |= PEV_CACHEMISS;
@@ -2872,21 +2875,19 @@ ruu_issue(void)
 	  rs->queued = FALSE;
 
 		// a load or store instruction hereee
-	  if (rs->in_LSQ
-	      && ((MD_OP_FLAGS(rs->op) & (F_MEM|F_STORE)) == (F_MEM|F_STORE)) || rs->in_LSQ
+	  if ((rs->in_LSQ
+	      && ((MD_OP_FLAGS(rs->op) & (F_MEM|F_STORE)) == (F_MEM|F_STORE))) || (rs->in_LSQ
 			  && ((MD_OP_FLAGS(rs->op) & (F_MEM|F_LOAD))
-			      == (F_MEM|F_LOAD))) {
+			      == (F_MEM|F_LOAD)))) {
 
-		
-// let's check the table shall we?
-if (prefetch_cache_enabled) {
+	// let's check the table shall we?
+	if (prefetch_cache_enabled) {
 		int index, lastIndex, doesExistIndex;
 		doesExistIndex = -1;
 		lastIndex = isFull ? sizeOfRPT : currentIndex + 1;
 		for (index = 0; index < lastIndex; index++) {
 		  if (tag_values[index] == rs->tag) {
 			doesExistIndex = index;
-			
 			break;
 		  }
 		}
@@ -2899,7 +2900,6 @@ if (prefetch_cache_enabled) {
 			int correct, currentState, currentStride;
 			md_addr_t prev_addr = prev_addr_values[doesExistIndex];
 			currentStride = stride_values[doesExistIndex];
-			//printf("[0x%08p]   [0x%08p]   %d    [0x%08p] \n", rs->addr, prev_addr, currentStride, (prev_addr + currentStride));
 			correct = (rs->addr == (prev_addr + currentStride));
 			currentState = state_values[doesExistIndex];
 			// first case - move to transition
@@ -2912,7 +2912,6 @@ if (prefetch_cache_enabled) {
 			else if (correct && (currentState == 0 || currentState == 1 || currentState == 2)) {
 				prev_addr_values[doesExistIndex] = (rs->addr);
 				state_values[doesExistIndex] = 2;
-				//printf("%d   %d\n", currentState, cache_probe(cache_dl1, rs->addr));
 			} 
 			// third case - steady state is over; back to initialization			
 			else if (!correct && currentState == 2) {
@@ -2937,46 +2936,18 @@ if (prefetch_cache_enabled) {
 			}
 
 			// now we check if we ought to prefetch
-			
-			if (correct) {
-			//	printf("[0x%08p]    [0x%08p]    %d   %d \n", rs->addr, prev_addr, currentStride, currentState);
-			}			
-
 
 			int shouldPrefetch = correct && currentState != 3;
-			md_addr_t prefetchAddr = rs->addr + currentStride;
-			//printf("%d   %d    %d\n", correct, currentState, currentStride);
-			int blockSizeCheck = (currentStride > BLOCK_SIZE || currentStride < -1*BLOCK_SIZE);
-			if (shouldPrefetch) {
+			md_addr_t prefetchAddr = (rs->addr + currentStride);
+			int inL1 = cache_probe(cache_dl1, prefetchAddr&~3);
+			int inL2 = cache_probe(cache_dl2, prefetchAddr&~3);
+			//int blockSizeCheck = (currentStride > BLOCK_SIZE || currentStride < -1*BLOCK_SIZE);
+			if (shouldPrefetch && !inL1 && MD_VALID_ADDR((rs->addr + currentStride))) {
 				// we have met the conditions for naive prefetch, we doin it 
-				numberOfMatches++;
-				//printf("%d\n", numberOfMatches);
-				//tick_t now = 0;
-				//int lat =
-				//	cache_access(cache_dl1, Write, prefetchAddr&~3,
-				  //  	 NULL, 4, sim_cycle, NULL, NULL);
-				//sim_cycle -= lat;
-				//printf("we writing\n");
+				cache_access(prefetch_cache, Write, prefetchAddr&~3,
+		   	 	NULL, 4, sim_cycle, NULL, NULL);
 				
-				int inL1 = cache_probe(cache_dl1, prefetchAddr&~3);
-				int inL2 = cache_probe(cache_dl2, prefetchAddr&~3);
-			//					printf("%08x   %08x  %d   %d\n", prefetchAddr, rs->addr, inL1, inL2);
-				//if (inL1) {
-				//	printf("in l1\n");
-				//}
-				//printf("%d   %d    %08x   %08x\n", inL1, inL2, prefetchAddr, prefetchAddr&~3);
-				
-				if (!inL1) {
-					int lat =
-						cache_access(prefetch_cache, Write, prefetchAddr&~3,
-				   	 	NULL, 4, sim_cycle, NULL, NULL);
-					
-				}
-				
-				if (inL2) {
-					//printf("GETTING HERERERE\n");
-            				//cache_flush_addr(cache_dl2, (prefetchAddr & ~3), sim_cycle);
-				}
+				// flush from L2 if it exists?
 			}		
 			
 		} else {
@@ -2985,7 +2956,7 @@ if (prefetch_cache_enabled) {
 			prev_addr_values[currentIndex] = rs->addr;
 			stride_values[currentIndex] = 0;
 			state_values[currentIndex] = 0;
-			if ((currentIndex + 1) >= sizeOfRPT) {
+			if (currentIndex == sizeOfRPT-1) {
 				isFull = 1;
 				currentIndex = 0;
 			} else {
@@ -3087,11 +3058,10 @@ if (prefetch_cache_enabled) {
 				 } 
 
 				if (isInPrefetch) {
-				      /* called to have LRU replacement effects */
-					 
-				      cache_access(prefetch_cache, Read, (rs->addr&~3), NULL, 4, sim_cycle, NULL, NULL);
+				     // cache_access(prefetch_cache, Read, (rs->addr&~3), NULL, 4, sim_cycle, NULL, NULL);
 					//cache_flush_addr(prefetch_cache, (rs->addr&~3), sim_cycle);
-					load_lat = 0;
+					stride_hits++;
+					load_lat = 1;
 				} else {
 				  	load_lat =
 				  	  cache_access(cache_dl1, Read,
