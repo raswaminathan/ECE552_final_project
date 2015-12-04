@@ -19,7 +19,7 @@ plot(bufferSize, vortex_IPC512, 'r-', ...
     bufferSize, vortex_IPC64, 'b-', ...
     x, v, 'k--');
 
-legend('512', '256', '128', '64', 'defaultIPC', 0);
+legend('512', '256', '128', '64', 'defaultIPC', 'Location', 'northwest');
 title('Vortex IPC for a stride prediction table of size 128');
 xlabel('Number of Prefetch Buffer Entries');
 ylabel('IPC');
@@ -39,7 +39,7 @@ plot(bufferSize, gcc_IPC512, 'r-', ...
     bufferSize, gcc_IPC64, 'b-', ...
     x, g, 'k--');
 
-legend('512', '256', '128', '64', 'defaultIPC', 0);
+legend('512', '256', '128', '64', 'defaultIPC', 'Location', 'northwest');
 title('GCC IPC for a stride prediction table of size 128');
 xlabel('Number of Prefetch Buffer Entries');
 ylabel('IPC');
